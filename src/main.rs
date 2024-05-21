@@ -4479,6 +4479,233 @@ use procon_reader::*;
 //////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////
 
+mod solver {
+    use super::*;
+    const N: usize = 5;
+    const MOVE_LEFT: usize = 0;
+    const MOVE_RIGHT: usize = 1;
+    const MOVE_UP: usize = 2;
+    const MOVE_DOWN: usize = 3;
+    const CAP_SWITCH: usize = 4;
+    const STAY: usize = 5;
+    const ACT_NUM: usize = 6;
+    const MOVE_NUM: usize = 4;
+    const DYDX: [(i64, i64); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
+    mod crane {
+        use super::*;
+        #[derive(Clone, PartialEq, Eq)]
+        pub struct Crane {
+            pub y: usize,
+            pub x: usize,
+        }
+        impl Crane {
+            #[inline(always)]
+            pub fn new(y: usize, x: usize) -> Self {
+                Self { y, x }
+            }
+            #[inline(always)]
+            pub fn act_next(&self, act: usize) -> Option<Self> {
+                match act {
+                    MOVE_LEFT => {
+                        if self.x == 0 {
+                            None
+                        } else {
+                            Some(Self::new(self.y, self.x - 1))
+                        }
+                    }
+                    MOVE_RIGHT => {
+                        if self.x >= N - 1 {
+                            None
+                        } else {
+                            Some(Self::new(self.y, self.x + 1))
+                        }
+                    }
+                    MOVE_UP => {
+                        if self.y == 0 {
+                            None
+                        } else {
+                            Some(Self::new(self.y - 1, self.x))
+                        }
+                    }
+                    MOVE_DOWN => {
+                        if self.y >= N - 1 {
+                            None
+                        } else {
+                            Some(Self::new(self.y + 1, self.x))
+                        }
+                    }
+                    STAY => Some(self.clone()),
+                    CAP_SWITCH => Some(self.clone()),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+    use crane::Crane;
+
+    mod state {
+        use super::*;
+        type Container = Vec<Vec<Vec<Option<usize>>>>;
+        pub struct State {
+            cranes: Vec<Crane>,
+            container: Container,
+            backyard: Vec<usize>,
+            seeks: Vec<usize>,
+        }
+        impl State {
+            pub fn new(a: &[Vec<usize>]) -> Self {
+                let cranes = (0..N).map(|y| Crane::new(y, 0)).collect::<Vec<_>>();
+                let mut container = vec![vec![vec![None; N]; N]; 2];
+                for y in 0..N {
+                    container[0][y][0] = Some(a[y][0]);
+                }
+                let backyard = vec![1; N];
+                let seeks = vec![0; N];
+                Self {
+                    cranes,
+                    container,
+                    backyard,
+                    seeks,
+                }
+            }
+            pub fn gen_next_state(&self, acts: Vec<usize>) -> Option<Self> {
+                #[inline(always)]
+                fn set_some(
+                    c: usize,
+                    y: usize,
+                    x: usize,
+                    h: usize,
+                    nfield: &mut [Vec<Vec<Option<usize>>>],
+                ) -> bool {
+                    if nfield[h][y][x].is_some() {
+                        false
+                    } else {
+                        nfield[h][y][x] = Some(c);
+                        true
+                    }
+                }
+
+                let mut nfield = self.container.clone();
+                for (h, container) in self.container.iter().enumerate() {
+                    for (y, container) in container.iter().enumerate() {
+                        for (x, container) in container.iter().enumerate() {
+                            if self.cranes.iter().any(|crane| crane.y == y && crane.x == x) {
+                                continue;
+                            }
+                            let Some(c) = container else {continue;};
+                            if !set_some(*c, y, x, h, &mut nfield) {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                let mut ncranes = vec![];
+                for (ci, (crane, &act)) in self.cranes.iter().zip(acts.iter()).enumerate() {
+                    let Some(ncrane) = crane.act_next(act) else {return None};
+                    if act < MOVE_NUM {
+                        // move any
+                        if let Some(c) = self.container[1][crane.y][crane.x] {
+                            // carry
+                            if !set_some(c, ncrane.y, ncrane.x, 1, &mut nfield) {
+                                return None;
+                            }
+                            if ci != 0 && nfield[0][ncrane.y][ncrane.x].is_some() {
+                                return None;
+                            }
+                        } else if let Some(c) = self.container[0][crane.y][crane.x] {
+                            // ignore
+                            if !set_some(c, ncrane.y, ncrane.x, 0, &mut nfield) {
+                                return None;
+                            }
+                        } else {
+                            // through
+                        }
+                    } else if act == STAY {
+                        for h in 0..2 {
+                            let Some(c) = nfield[h][crane.y][crane.x] else {continue;};
+                            if !set_some(c, ncrane.y, ncrane.x, h, &mut nfield) {
+                                return None;
+                            }
+                        }
+                    } else {
+                        debug_assert!(act == CAP_SWITCH);
+                        if self.container[0][crane.y][crane.x].is_some()
+                            == self.container[1][crane.y][crane.x].is_some()
+                        {
+                            return None;
+                        }
+                        for h in 0..2 {
+                            let Some(c) = nfield[h][crane.y][crane.x] else {continue;};
+                            if !set_some(c, ncrane.y, ncrane.x, 1 - h, &mut nfield) {
+                                return None;
+                            }
+                        }
+                    }
+                    ncranes.push(ncrane);
+                }
+                for i in 0..N {
+                    for j in (0..N).skip(i + 1) {
+                        if ncranes[i] == ncranes[j] {
+                            return None;
+                        }
+                        if self.cranes[i] == ncranes[j] && self.cranes[j] == ncranes[i] {
+                            return None;
+                        }
+                    }
+                }
+                panic!("backyard, seeks");
+            }
+        }
+    }
+    use state::State;
+    pub struct Solver {
+        t0: Instant,
+        a: Vec<Vec<usize>>,
+    }
+    impl Solver {
+        fn sim(&self) -> Vec<Vec<usize>> {
+            todo!();
+        }
+        fn answer(ans: Vec<Vec<usize>>) {
+            ans.into_iter().for_each(|ans| {
+                let mut cap = false;
+                for ans in ans {
+                    print!(
+                        "{}",
+                        match ans {
+                            STAY => '.',
+                            MOVE_LEFT => 'L',
+                            MOVE_RIGHT => 'R',
+                            MOVE_UP => 'U',
+                            MOVE_DOWN => 'D',
+                            CAP_SWITCH => {
+                                cap = !cap;
+                                if cap {
+                                    'P'
+                                } else {
+                                    'Q'
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                    );
+                }
+                println!();
+            })
+        }
+        pub fn solve(&self) {
+            let ans = self.sim();
+            Self::answer(ans);
+        }
+        pub fn new() -> Self {
+            Self {
+                t0: Instant::now(),
+                a: read_mat::<usize>(N, N),
+            }
+        }
+    }
+}
 fn main() {
     read::<usize>();
 }
