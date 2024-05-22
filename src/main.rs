@@ -4685,13 +4685,12 @@ mod solver {
                             if ci != 0 && nfield[0][nhand.y][nhand.x].is_some() {
                                 return None;
                             }
-                        } else if let Some(c) = self.container[0][hand.y][hand.x] {
+                        }
+                        if let Some(c) = self.container[0][hand.y][hand.x] {
                             // ignore the ground container
-                            if !set_some(c, nhand.y, nhand.x, 0, &mut nfield) {
+                            if !set_some(c, hand.y, hand.x, 0, &mut nfield) {
                                 return None;
                             }
-                        } else {
-                            // through empty
                         }
                     } else {
                         debug_assert!(act == CAP_SWITCH);
@@ -4701,7 +4700,7 @@ mod solver {
                             return None;
                         }
                         for h in 0..2 {
-                            let Some(c) = nfield[h][hand.y][hand.x] else {continue;};
+                            let Some(c) = self.container[h][hand.y][hand.x] else {continue;};
                             if !set_some(c, nhand.y, nhand.x, 1 - h, &mut nfield) {
                                 return None;
                             }
@@ -4756,17 +4755,16 @@ mod solver {
                 }
                 for y0 in 0..N {
                     for x0 in 0..N {
-                        for &(dy, dx) in [(0, 1), (1, 0)].iter() {
-                            if x0 == N - 1 && dy != 0 {
+                        for &(dy, dx) in DYDX.iter().take(4) {
+                            let Some(y1) = y0.move_delta(dy, 0, N - 1) else {continue;};
+                            let Some(x1) = x0.move_delta(dx, 0, N - 1) else {continue;};
+                            if self.container[0][y1][x1].is_some() {
                                 continue;
                             }
-                            let y1 = y0 + dy;
-                            let x1 = x0 + dx;
-                            if y1 >= N || x1 >= N || self.container[0][y1][x1].is_some() {
+                            if self.container[1][y1][x1].is_some() {
                                 continue;
                             }
                             dist[y0][x0][y1][x1] = Some(1);
-                            dist[y1][x1][y0][x0] = Some(1);
                         }
                     }
                 }
@@ -4817,6 +4815,9 @@ mod solver {
                     let mut t = (0, 0);
                     for &(ty, tx) in keep_order {
                         let d = if hi == 0 {
+                            if self.container[0][ty][tx].is_some() {
+                                continue;
+                            }
                             (ty as i64 - cy as i64).abs() + (tx as i64 - cx as i64).abs()
                         } else if let Some(d) = dist0[cy][cx][ty][tx] {
                             d
@@ -4915,7 +4916,16 @@ mod solver {
                 keep_order,
             }
         }
-        fn sim(&self) -> Vec<Vec<usize>> {
+        fn next_state(
+            &self,
+            li: usize,
+            retry: usize,
+            state: &State,
+            pre_states: &VecDeque<State>,
+            seen_his: usize,
+            seen_cis: usize,
+        ) -> Option<((usize, usize), State, usize, usize)> {
+            let dist0 = state.gen_dist0();
             fn calc_reach_cost(
                 hi: usize,
                 hand: &Hand,
@@ -4953,182 +4963,243 @@ mod solver {
                 };
                 capture + come_move + go_move
             }
-            let mut state = State::new(&self.a);
-            let mut ans_acts = vec![vec![]; N];
-            for _ in 0..10000 {
-                let dist0 = state.gen_dist0();
-                // todo: split capturing or not
-                let mut trans_eval = vec![vec![1i64 << 60; ACTION_NUM]; N];
-                let mut seen_his = 0;
-                // 1. capturing
-                for (hi, (hand, trans_eval)) in
-                    state.hands().iter().zip(trans_eval.iter_mut()).enumerate()
-                {
+            // 1. capturing
+            {
+                let mut best_eval = None;
+                let mut best_ai_nstate_ndist0 = None;
+                for (hi, hand) in state.hands().iter().enumerate() {
+                    if (seen_his >> hi) & 1 != 0 {
+                        continue;
+                    }
                     let Some(ci) = state.container()[1][hand.y][hand.x] else {continue;};
-                    seen_his |= 1usize << hi;
+                    if (seen_cis >> ci) & 1 != 0 {
+                        continue;
+                    }
                     let (ty, tx) =
                         state.calc_reasonable_tgt(hi, ci, hand.y, hand.x, &dist0, &self.keep_order);
-                    let d0 =
-                        calc_reach_cost(hi, hand, Some(ci), ci, hand.y, hand.x, 1, ty, tx, &dist0);
-                    // actions
                     for ai in 0..ACTION_NUM {
-                        let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
-                        let ncz = if ai == CAP_SWITCH { 0 } else { 1 };
-                        let d1 = calc_reach_cost(
-                            hi,
-                            &nhand,
-                            Some(ci),
-                            ci,
-                            nhand.y,
-                            nhand.x,
-                            ncz,
-                            ty,
-                            tx,
-                            &dist0,
-                        );
-                        trans_eval[ai] = d1;
-                    }
-                    if state.container_is_seeked(ci).is_some() {
-                        trans_eval.iter_mut().for_each(|e| {
-                            *e += EVAL_UNIT;
-                        });
-                    }
-                }
-                // 2. not captured matching
-                {
-                    let src = N * ACTION_NUM * N * N;
-                    let dst = src + 1;
-                    let mut flow = Flow::new(dst + 1);
-                    for hi in 0..N {
-                        flow.add_cost_edge(src, hi, 1, 0);
-                        for ai in 0..ACTION_NUM {
-                            flow.add_cost_edge(hi, N + hi * ACTION_NUM + ai, 1, 0);
-                        }
-                    }
-                    for ci in 0..N * N {
-                        flow.add_cost_edge(N + N * ACTION_NUM + ci, dst, 1, 0);
-                    }
-
-                    for (hi, hand) in state.hands().iter().enumerate() {
-                        if (seen_his >> hi) & 1 != 0 {
+                        let mut temp_acts = vec![STAY; N];
+                        temp_acts[hi] = ai;
+                        let Some(nstate) = state.gen_next_state(&temp_acts, &self.a) else {continue;};
+                        if pre_states.iter().any(|pstate| pstate.clone() == nstate) {
                             continue;
                         }
-                        for cy in 0..N {
-                            for cx in 0..N {
-                                let Some(ci) = state.container()[0][cy][cx] else {continue;};
-                                let (ty, tx) = state.calc_reasonable_tgt(
-                                    hi,
-                                    ci,
-                                    cy,
-                                    cx,
-                                    &dist0,
-                                    &self.keep_order,
-                                );
-                                let ci_in_hand0 = state.container()[1][hand.y][hand.x];
-                                let d0 = calc_reach_cost(
-                                    hi,
-                                    hand,
-                                    ci_in_hand0,
-                                    ci,
-                                    cy,
-                                    cx,
-                                    0,
-                                    ty,
-                                    tx,
-                                    &dist0,
-                                );
-                                // actions
-                                for ai in 0..ACTION_NUM {
-                                    let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
-                                    let (ncz, ci_in_hand1) = if ai == CAP_SWITCH {
-                                        if (hand.y, hand.x) == (cy, cx) {
-                                            (1, Some(ci))
-                                        } else if let Some(ci_in_hand) =
-                                            state.container()[0][hand.y][hand.x]
-                                        {
-                                            (0, Some(ci_in_hand))
-                                        } else {
-                                            (0, None)
-                                        }
+                        assert!(pre_states.iter().all(|pstate| pstate.clone() != nstate));
+                        let ndist0 = nstate.gen_dist0();
+                        let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
+                        let seeked = state.container_is_seeked(ci).is_some();
+                        let eval = if !seeked && nhand.x == N - 1 {
+                            EVAL_UNIT
+                        } else {
+                            let ncz = if ai == CAP_SWITCH { 0 } else { 1 };
+                            let d1 = calc_reach_cost(
+                                hi,
+                                &nhand,
+                                Some(ci),
+                                ci,
+                                nhand.y,
+                                nhand.x,
+                                ncz,
+                                ty,
+                                tx,
+                                &ndist0,
+                            );
+                            if seeked {
+                                d1 - EVAL_UNIT
+                            } else {
+                                d1
+                            }
+                        };
+                        if best_eval.chmin((eval, hi)) {
+                            best_ai_nstate_ndist0 = Some((ai, nstate, hi, ci, ndist0));
+                        }
+                    }
+                }
+                if let Some((ai, nstate, hi, ci, _ndist0)) = best_ai_nstate_ndist0 {
+                    return Some((
+                        (hi, ai),
+                        nstate,
+                        seen_his | (1usize << hi),
+                        seen_cis | (1usize << ci),
+                    ));
+                }
+            }
+
+            // 2. not captured
+            {
+                let mut best_eval = None;
+                let mut best_ai_nstate_ndist0 = None;
+                for (hi, hand) in state.hands().iter().enumerate() {
+                    if (seen_his >> hi) & 1 != 0 {
+                        continue;
+                    }
+                    for cy in 0..N {
+                        for cx in 0..N - 1 {
+                            let Some(ci) = state.container()[0][cy][cx] else {continue;};
+                            let seeked = state.container_is_seeked(ci).is_some();
+                            if !seeked && cx > 0 {
+                                continue;
+                            }
+                            if (seen_cis >> ci) & 1 != 0 {
+                                continue;
+                            }
+                            let (ty, tx) =
+                                state.calc_reasonable_tgt(hi, ci, cy, cx, &dist0, &self.keep_order);
+                            for ai in 0..ACTION_NUM {
+                                let mut temp_acts = vec![STAY; N];
+                                temp_acts[hi] = ai;
+                                let Some(nstate) = state.gen_next_state(&temp_acts, &self.a) else {continue;};
+                                if pre_states.iter().any(|pstate| pstate.clone() == nstate) {
+                                    continue;
+                                }
+                                if li > 90 {
+                                    debug!(retry, ty, tx);
+                                }
+                                let ndist0 = nstate.gen_dist0();
+                                let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
+                                let eval = if !seeked && nhand.x == N - 1 {
+                                    EVAL_UNIT
+                                } else {
+                                    let ncz = if ai == CAP_SWITCH && (cy, cx) == (hand.y, hand.x) {
+                                        1
                                     } else {
-                                        (0, ci_in_hand0)
+                                        0
                                     };
                                     let d1 = calc_reach_cost(
                                         hi,
                                         &nhand,
-                                        ci_in_hand1,
+                                        nstate.container()[1][nhand.y][nhand.x],
                                         ci,
                                         cy,
                                         cx,
                                         ncz,
                                         ty,
                                         tx,
-                                        &dist0,
+                                        &ndist0,
                                     );
-                                    let mut cost = d1;
-                                    if state.container_is_seeked(ci).is_some() {
-                                        cost *= EVAL_UNIT;
+                                    let d1 = if seeked { d1 - EVAL_UNIT } else { d1 };
+                                    d1
+                                };
+                                if best_eval.chmin((!seeked, eval)) {
+                                    best_ai_nstate_ndist0 = Some((ai, nstate, hi, ci, ndist0));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some((ai, nstate, hi, ci, _dist0)) = best_ai_nstate_ndist0 {
+                    return Some((
+                        (hi, ai),
+                        nstate,
+                        seen_his | (1usize << hi),
+                        seen_cis | (1usize << ci),
+                    ));
+                }
+            }
+            None
+        }
+        fn sim(&self) -> Vec<Vec<usize>> {
+            let mut rand = XorShift64::new();
+            let mut state = State::new(&self.a);
+            let mut pre_states = VecDeque::new();
+            let mut ans_acts = vec![vec![]; N];
+            for li in 0..10000 {
+                // todo: split capturing or not
+                let mut best_acts = vec![STAY; N];
+                let mut seen_his = 0;
+                let mut seen_cis = 0;
+                while seen_his != ((1usize << N) - 1) {
+                    if let Some(((hi, ai), nstate, nseen_his, nseen_cis)) =
+                        self.next_state(li, 0, &state, &pre_states, seen_his, seen_cis) {
+                            seen_his = nseen_his;
+                            seen_cis = nseen_cis;
+                            pre_states.push_back(state);
+                            state = nstate;
+                            best_acts[hi] = ai;
+                            if pre_states.len() > 10 {
+                                //pre_states.pop_front();
+                            }
+                    }
+                }
+
+                /*
+                if best_acts == vec![STAY; N] {
+                    assert!(false);
+                    'salvage:  {
+                        let hi0 = rand.next_usize() % N;
+                        let ai0 = (STAY + 1 + rand.next_usize() % (ACTION_NUM - 1)) % ACTION_NUM;
+                        let mut temp = vec![STAY; N];
+                        temp[hi0] = ai0;
+                        if let Some(mut piv_state) = state.gen_next_state(&temp, &self.a)
+                        {
+                            seen_his = 1usize << hi0;
+                            seen_cis = 0;
+                            while seen_his != ((1usize << N) - 1) {
+                                if let Some(((hi, ai), nstate, nseen_his, nseen_cis)) =
+                                    self.next_state(li,1, &piv_state, seen_his, seen_cis) {
+                                        seen_his = nseen_his;
+                                        seen_cis = nseen_cis;
+                                        piv_state = nstate;
+                                        best_acts[hi] = ai;
+                                }
+                            }
+                            best_acts[hi0] = ai0;
+                            if best_acts != vec![STAY; N] {
+                                state = piv_state;
+                                break 'salvage;
+                            }
+                        }
+                    }
+
+                }
+                 */
+
+                //if false
+                #[cfg(debug_assertions)]
+                {
+                    debug!(li);
+                    for z in 0..2 {
+                        for y in 0..N {
+                            for x in 0..N {
+                                if let Some(ci) = state.container()[z][y][x] {
+                                    let mut v = ci.to_string().chars().collect::<VecDeque<_>>();
+                                    v.push_back(' ');
+                                    while v.len() < 4 {
+                                        v.push_front(' ');
                                     }
-                                    flow.add_cost_edge(
-                                        N + hi * ACTION_NUM + ai,
-                                        N + N * ACTION_NUM + ci,
-                                        1,
-                                        cost,
-                                    );
+                                    let s = v.into_iter().collect::<String>();
+                                    eprint!("{s}");
+                                } else {
+                                    eprint!(" -- ");
                                 }
                             }
+                            eprintln!();
                         }
+                        eprintln!();
                     }
-                    let fval = N as i64 - seen_his.count_ones() as i64;
-                    let (tcost, tval) = flow.min_cost_flow(src, dst, fval, fval).unwrap();
-                    for (hi, trans_eval) in trans_eval.iter_mut().enumerate() {
-                        for ai in 0..ACTION_NUM {
-                            for e in flow.g[N + hi * ACTION_NUM + ai].iter() {
-                                if e.flow == 0 {
-                                    continue;
+                    for y in 0..N {
+                        for x in 0..N {
+                            let mut s = String::from(" -- ");
+                            for (hi, hand) in state.hands().iter().enumerate() {
+                                if (hand.y, hand.x) == (y, x) {
+                                    s = format!(" {} ", hi);
+                                    break;
                                 }
-                                if (e.to < N + N * ACTION_NUM)
-                                    || (N + N * ACTION_NUM + N * N <= e.to)
-                                {
-                                    continue;
-                                }
-                                let ai = (e.to - N) % N;
-                                let cost = e.cost;
-                                debug!(hi, ai, cost);
-                                trans_eval[ai] = cost;
                             }
+                            eprint!("{s}");
                         }
+                        eprintln!();
                     }
+                    eprintln!();
                 }
-                let mut best_eval = 1i64 << 60;
-                let mut best_acts = vec![];
-                let mut best_state = State::new(&self.a);
-                for acts in (0..ACTION_NUM.pow(N as u32)).map(|mut bit| {
-                    let mut acts = vec![];
-                    for _ in 0..N {
-                        acts.push(bit % ACTION_NUM);
-                        bit /= ACTION_NUM;
-                    }
-                    acts
-                }) {
-                    let eval = trans_eval
-                        .iter()
-                        .zip(acts.iter())
-                        .map(|(trans, &act)| trans[act])
-                        .sum::<i64>();
-                    if best_eval > eval {
-                        if let Some(nstate) = state.gen_next_state(&acts, &self.a) {
-                            best_state = nstate;
-                            best_eval = eval;
-                            best_acts = acts;
-                        }
-                    }
-                }
-                eprintln!("{:?}", best_acts);
-                debug_assert!(state != best_state);
-                state = best_state;
                 for (hi, act) in best_acts.into_iter().enumerate() {
                     ans_acts[hi].push(act);
+                }
+                //#[cfg(debug_assertions)]
+                {
+                    if li >= 100 {
+                        break;
+                    }
                 }
                 if state.has_end() {
                     break;
