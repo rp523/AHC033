@@ -4479,6 +4479,9 @@ use procon_reader::*;
 //////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////
 
+fn main() {
+    solver::Solver::new().solve();
+}
 mod solver {
     use super::*;
     const N: usize = 5;
@@ -4486,75 +4489,113 @@ mod solver {
     const MOVE_RIGHT: usize = 1;
     const MOVE_UP: usize = 2;
     const MOVE_DOWN: usize = 3;
-    const CAP_SWITCH: usize = 4;
-    const STAY: usize = 5;
-    const ACT_NUM: usize = 6;
-    const MOVE_NUM: usize = 4;
-    const DYDX: [(i64, i64); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
-    mod crane {
+    const STAY: usize = 4;
+    const CAP_SWITCH: usize = 5;
+    const ACTION_NUM: usize = 6;
+    const DYDX: [(i64, i64); 5] = [(0, -1), (0, 1), (-1, 0), (1, 0), (0, 0)];
+    const INF: i64 = 1i64 << 60;
+    const EVAL_UNIT: i64 = (N * N * 2) as i64;
+    type Container = Vec<Vec<Vec<Option<usize>>>>;
+    mod hand {
         use super::*;
         #[derive(Clone, PartialEq, Eq)]
-        pub struct Crane {
+        pub struct Hand {
             pub y: usize,
             pub x: usize,
         }
-        impl Crane {
+        impl Hand {
             #[inline(always)]
             pub fn new(y: usize, x: usize) -> Self {
                 Self { y, x }
             }
             #[inline(always)]
-            pub fn act_next(&self, act: usize) -> Option<Self> {
+            pub fn act_next(&self, hi: usize, act: usize, container: &Container) -> Option<Self> {
                 match act {
                     MOVE_LEFT => {
                         if self.x == 0 {
-                            None
-                        } else {
-                            Some(Self::new(self.y, self.x - 1))
+                            return None;
                         }
+                        if hi != 0
+                            && container[1][self.y][self.x].is_some()
+                            && container[0][self.y][self.x - 1].is_some()
+                        {
+                            return None;
+                        }
+                        Some(Self::new(self.y, self.x - 1))
                     }
                     MOVE_RIGHT => {
                         if self.x >= N - 1 {
-                            None
-                        } else {
-                            Some(Self::new(self.y, self.x + 1))
+                            return None;
                         }
+                        if hi != 0
+                            && container[1][self.y][self.x].is_some()
+                            && container[0][self.y][self.x + 1].is_some()
+                        {
+                            return None;
+                        }
+                        Some(Self::new(self.y, self.x + 1))
                     }
                     MOVE_UP => {
                         if self.y == 0 {
-                            None
-                        } else {
-                            Some(Self::new(self.y - 1, self.x))
+                            return None;
                         }
+                        if hi != 0
+                            && container[1][self.y][self.x].is_some()
+                            && container[0][self.y - 1][self.x].is_some()
+                        {
+                            return None;
+                        }
+                        Some(Self::new(self.y - 1, self.x))
                     }
                     MOVE_DOWN => {
                         if self.y >= N - 1 {
-                            None
-                        } else {
-                            Some(Self::new(self.y + 1, self.x))
+                            return None;
                         }
+                        if hi != 0
+                            && container[1][self.y][self.x].is_some()
+                            && container[0][self.y + 1][self.x].is_some()
+                        {
+                            return None;
+                        }
+                        Some(Self::new(self.y + 1, self.x))
                     }
                     STAY => Some(self.clone()),
-                    CAP_SWITCH => Some(self.clone()),
+                    CAP_SWITCH => {
+                        if container[0][self.y][self.x].is_some()
+                            == container[1][self.y][self.x].is_some()
+                        {
+                            None
+                        } else {
+                            Some(self.clone())
+                        }
+                    }
                     _ => unreachable!(),
                 }
             }
         }
     }
-    use crane::Crane;
+    use hand::Hand;
 
     mod state {
         use super::*;
-        type Container = Vec<Vec<Vec<Option<usize>>>>;
         pub struct State {
-            cranes: Vec<Crane>,
+            hands: Vec<Hand>,
             container: Container,
             backyard: Vec<usize>,
             seeks: Vec<usize>,
+            absorpt: usize,
         }
         impl State {
+            #[inline(always)]
+            pub fn hands(&self) -> &[Hand] {
+                &self.hands
+            }
+            #[inline(always)]
+            pub fn container(&self) -> &Container {
+                &self.container
+            }
             pub fn new(a: &[Vec<usize>]) -> Self {
-                let cranes = (0..N).map(|y| Crane::new(y, 0)).collect::<Vec<_>>();
+                let hands = (0..N).map(|y| Hand::new(y, 0)).collect::<Vec<_>>();
                 let mut container = vec![vec![vec![None; N]; N]; 2];
                 for y in 0..N {
                     container[0][y][0] = Some(a[y][0]);
@@ -4562,13 +4603,35 @@ mod solver {
                 let backyard = vec![1; N];
                 let seeks = vec![0; N];
                 Self {
-                    cranes,
+                    hands,
                     container,
                     backyard,
                     seeks,
+                    absorpt: 0,
                 }
             }
-            pub fn gen_next_state(&self, acts: Vec<usize>) -> Option<Self> {
+            pub fn gen_next_state(&self, acts: &[usize], a: &[Vec<usize>]) -> Option<Self> {
+                let nhands = self
+                    .hands
+                    .iter()
+                    .zip(acts.iter())
+                    .enumerate()
+                    .filter_map(|(hi, (hand, &act))| hand.act_next(hi, act, &self.container))
+                    .collect::<Vec<_>>();
+                if nhands.len() < N {
+                    return None;
+                }
+                for i in 0..N {
+                    for j in (0..N).skip(i + 1) {
+                        if nhands[i] == nhands[j] {
+                            return None;
+                        }
+                        if self.hands[i] == nhands[j] && self.hands[j] == nhands[i] {
+                            return None;
+                        }
+                    }
+                }
+
                 #[inline(always)]
                 fn set_some(
                     c: usize,
@@ -4585,11 +4648,15 @@ mod solver {
                     }
                 }
 
+                let exists_ohands = self
+                    .hands
+                    .iter()
+                    .fold(0, |ex, hand| ex | (1usize << (hand.y * N + hand.x)));
                 let mut nfield = self.container.clone();
                 for (h, container) in self.container.iter().enumerate() {
                     for (y, container) in container.iter().enumerate() {
                         for (x, container) in container.iter().enumerate() {
-                            if self.cranes.iter().any(|crane| crane.y == y && crane.x == x) {
+                            if (exists_ohands >> (y * N + x)) & 1 != 0 {
                                 continue;
                             }
                             let Some(c) = container else {continue;};
@@ -4600,61 +4667,161 @@ mod solver {
                     }
                 }
 
-                let mut ncranes = vec![];
-                for (ci, (crane, &act)) in self.cranes.iter().zip(acts.iter()).enumerate() {
-                    let Some(ncrane) = crane.act_next(act) else {return None};
-                    if act < MOVE_NUM {
+                for (ci, ((hand, nhand), &act)) in self
+                    .hands
+                    .iter()
+                    .zip(nhands.iter())
+                    .zip(acts.iter())
+                    .enumerate()
+                {
+                    if act <= STAY {
                         // move any
-                        if let Some(c) = self.container[1][crane.y][crane.x] {
-                            // carry
-                            if !set_some(c, ncrane.y, ncrane.x, 1, &mut nfield) {
+                        if let Some(c) = self.container[1][hand.y][hand.x] {
+                            // carrying
+                            if !set_some(c, nhand.y, nhand.x, 1, &mut nfield) {
                                 return None;
                             }
-                            if ci != 0 && nfield[0][ncrane.y][ncrane.x].is_some() {
+                            if ci != 0 && nfield[0][nhand.y][nhand.x].is_some() {
                                 return None;
                             }
-                        } else if let Some(c) = self.container[0][crane.y][crane.x] {
-                            // ignore
-                            if !set_some(c, ncrane.y, ncrane.x, 0, &mut nfield) {
+                        } else if let Some(c) = self.container[0][hand.y][hand.x] {
+                            // ignore the ground container
+                            if !set_some(c, nhand.y, nhand.x, 0, &mut nfield) {
                                 return None;
                             }
                         } else {
-                            // through
-                        }
-                    } else if act == STAY {
-                        for h in 0..2 {
-                            let Some(c) = nfield[h][crane.y][crane.x] else {continue;};
-                            if !set_some(c, ncrane.y, ncrane.x, h, &mut nfield) {
-                                return None;
-                            }
+                            // through empty
                         }
                     } else {
                         debug_assert!(act == CAP_SWITCH);
-                        if self.container[0][crane.y][crane.x].is_some()
-                            == self.container[1][crane.y][crane.x].is_some()
+                        if self.container[0][hand.y][hand.x].is_some()
+                            == self.container[1][hand.y][hand.x].is_some()
                         {
                             return None;
                         }
                         for h in 0..2 {
-                            let Some(c) = nfield[h][crane.y][crane.x] else {continue;};
-                            if !set_some(c, ncrane.y, ncrane.x, 1 - h, &mut nfield) {
+                            let Some(c) = nfield[h][hand.y][hand.x] else {continue;};
+                            if !set_some(c, nhand.y, nhand.x, 1 - h, &mut nfield) {
                                 return None;
                             }
                         }
                     }
-                    ncranes.push(ncrane);
                 }
-                for i in 0..N {
-                    for j in (0..N).skip(i + 1) {
-                        if ncranes[i] == ncranes[j] {
-                            return None;
+
+                // left end
+                let mut nbackyard = self.backyard.clone();
+                for y in 0..N {
+                    if nbackyard[y] >= N || nfield[0][y][0].is_some() || nfield[1][y][0].is_some() {
+                        continue;
+                    }
+                    nfield[0][y][0] = Some(a[y][nbackyard[y]]);
+                    nbackyard[y] += 1;
+                }
+
+                // right end
+                let mut nseeks = self.seeks.clone();
+                let nabsorpt = {
+                    let mut nabsorpt = self.absorpt;
+                    for y in 0..N {
+                        let Some(ar) = nfield[0][y][N - 1] else {continue;};
+                        nabsorpt |= 1usize << ar;
+                        nfield[0][y][N - 1] = None;
+                    }
+                    nabsorpt
+                };
+                for y in 0..N {
+                    while nseeks[y] < N && ((nabsorpt >> (y * N + nseeks[y])) & 1 != 0) {
+                        nseeks[y] += 1;
+                    }
+                }
+
+                Some(Self {
+                    hands: nhands,
+                    container: nfield,
+                    backyard: nbackyard,
+                    seeks: nseeks,
+                    absorpt: nabsorpt,
+                })
+            }
+            pub fn has_end(&self) -> bool {
+                return self.absorpt.count_ones() as usize == N * N;
+            }
+            pub fn gen_dist0(&self) -> Vec<Vec<Vec<Vec<Option<i64>>>>> {
+                let mut dist = vec![vec![vec![vec![None; N]; N]; N]; N];
+                for y in 0..N {
+                    for x in 0..N {
+                        dist[y][x][y][x] = Some(0);
+                    }
+                }
+                for y0 in 0..N {
+                    for x0 in 0..N {
+                        if self.container[0][y0][x0].is_some() {
+                            continue;
                         }
-                        if self.cranes[i] == ncranes[j] && self.cranes[j] == ncranes[i] {
-                            return None;
+                        for &(dy, dx) in [(0, 1), (1, 0)].iter() {
+                            if x0 == N - 1 && dy != 0 {
+                                continue;
+                            }
+                            let y1 = y0 + dy;
+                            let x1 = x0 + dx;
+                            if y1 >= N || x1 >= N || self.container[0][y1][x1].is_some() {
+                                continue;
+                            }
+                            dist[y0][x0][y1][x1] = Some(1);
+                            dist[y1][x1][y0][x0] = Some(1);
                         }
                     }
                 }
-                panic!("backyard, seeks");
+                for ky in 0..N {
+                    for kx in 0..N {
+                        for iy in 0..N {
+                            for ix in 0..N {
+                                let Some(d_ik) = dist[iy][ix][ky][kx] else {continue;};
+                                for jy in 0..N {
+                                    for jx in 0..N {
+                                        let Some(d_kj) = dist[ky][kx][jy][jx] else {continue;};
+                                        dist[iy][ix][jy][jx].chmin(d_ik + d_kj);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                dist
+            }
+            #[inline(always)]
+            pub fn container_is_seeked(&self, ci: usize) -> Option<(usize, usize)> {
+                for (y, seek) in self.seeks.iter().enumerate() {
+                    if y * N + seek == ci {
+                        return Some((y, N - 1));
+                    }
+                }
+                None
+            }
+            pub fn calc_reasonable_tgt(
+                &self,
+                hi: usize,
+                ci: usize,
+                cy: usize,
+                cx: usize,
+                dist0: &[Vec<Vec<Vec<Option<i64>>>>],
+                keep_order: &[Vec<(usize, usize)>],
+            ) -> (usize, usize) {
+                if let Some((ty, tx)) = self.container_is_seeked(ci) {
+                    debug_assert!(tx == N - 1);
+                    // seeked
+                    if hi == 0 || dist0[cy][cx][ty][tx].is_some() {
+                        return (ty, N - 1);
+                    }
+                }
+                for keep_order in keep_order {
+                    for &(ty, tx) in keep_order {
+                        if hi == 0 || dist0[cy][cx][ty][tx].is_some() {
+                            return (ty, tx);
+                        }
+                    }
+                }
+                (cy, cx)
             }
         }
     }
@@ -4662,10 +4829,12 @@ mod solver {
     pub struct Solver {
         t0: Instant,
         a: Vec<Vec<usize>>,
+        keep_order: Vec<Vec<(usize, usize)>>,
     }
     impl Solver {
-        fn sim(&self) -> Vec<Vec<usize>> {
-            todo!();
+        pub fn solve(&self) {
+            let ans = self.sim();
+            Self::answer(ans);
         }
         fn answer(ans: Vec<Vec<usize>>) {
             ans.into_iter().for_each(|ans| {
@@ -4694,18 +4863,221 @@ mod solver {
                 println!();
             })
         }
-        pub fn solve(&self) {
-            let ans = self.sim();
-            Self::answer(ans);
-        }
         pub fn new() -> Self {
+            let keep_order = vec![
+                vec![
+                    (1, 2), // 0
+                    (3, 2), // 0
+                    (0, 2), // 0
+                    (4, 2), // 0
+                ],
+                vec![
+                    (0, 3), // 1
+                    (4, 3), // 1
+                ],
+                vec![
+                    (1, 3), // 2
+                    (3, 3), // 2
+                ],
+                vec![
+                    (2, 3), // 3
+                ],
+                vec![
+                    (2, 2), // 4
+                ],
+                vec![
+                    (0, 1), // 5
+                    (4, 1), // 5
+                ],
+                vec![
+                    (1, 1), // 6
+                    (3, 1), // 6
+                ],
+                vec![
+                    (2, 1), // 7
+                ],
+            ];
             Self {
                 t0: Instant::now(),
                 a: read_mat::<usize>(N, N),
+                keep_order,
             }
         }
+        fn sim(&self) -> Vec<Vec<usize>> {
+            fn calc_reach_cost(
+                hi: usize,
+                hand: &Hand,
+                ci_in_hand: Option<usize>,
+                ci: usize,
+                cy: usize,
+                cx: usize,
+                cz: usize,
+                ty: usize,
+                tx: usize,
+                dist0: &[Vec<Vec<Vec<Option<i64>>>>],
+            ) -> i64 {
+                if (cy, cx, cz) == (ty, tx, 0) {
+                    return 0;
+                }
+                let capture = if ci_in_hand == Some(ci) {
+                    // already capturing this container.
+                    // must drop
+                    1
+                } else if ci_in_hand.is_none() {
+                    // the hand is empty
+                    // must pick up & drop
+                    2
+                } else {
+                    // hand capturing another container
+                    // must drop & pick up & drop
+                    3
+                };
+                let come_move =
+                    (cy as i64 - hand.y as i64).abs() + (cx as i64 - hand.x as i64).abs();
+                let go_move = if hi == 0 {
+                    (ty as i64 - cy as i64).abs() + (tx as i64 - cx as i64).abs()
+                } else {
+                    dist0[cy][cx][ty][tx].unwrap()
+                };
+                capture + come_move + go_move
+            }
+            let mut state = State::new(&self.a);
+            let mut ans_acts = vec![vec![]; N];
+            while !state.has_end() {
+                let dist0 = state.gen_dist0();
+                // todo: split capturing or not
+                let mut trans_eval = vec![vec![0i64; ACTION_NUM]; N];
+                let mut seen_his = 0;
+                // 1. capturing
+                for (hi, (hand, trans_eval)) in
+                    state.hands().iter().zip(trans_eval.iter_mut()).enumerate()
+                {
+                    let Some(ci) = state.container()[1][hand.y][hand.x] else {continue;};
+                    seen_his |= 1usize << hi;
+                    let (ty, tx) =
+                        state.calc_reasonable_tgt(hi, ci, hand.y, hand.x, &dist0, &self.keep_order);
+                    let d0 =
+                        calc_reach_cost(hi, hand, Some(ci), ci, hand.y, hand.x, 1, ty, tx, &dist0);
+                    // actions
+                    for ai in 0..ACTION_NUM {
+                        let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
+                        let ncz = if ai == CAP_SWITCH { 0 } else { 1 };
+                        let d1 = calc_reach_cost(
+                            hi,
+                            &nhand,
+                            Some(ci),
+                            ci,
+                            nhand.y,
+                            nhand.x,
+                            ncz,
+                            ty,
+                            tx,
+                            &dist0,
+                        );
+                        trans_eval[ai] += d1 - d0;
+                    }
+                    trans_eval.iter_mut().for_each(|e| {
+                        *e += EVAL_UNIT;
+                    });
+                    if state.container_is_seeked(ci).is_some() {
+                        trans_eval.iter_mut().for_each(|e| {
+                            *e += EVAL_UNIT;
+                        });
+                    }
+                }
+                // 2. not captured matching
+                for (hi, (hand, trans_eval)) in
+                    state.hands().iter().zip(trans_eval.iter_mut()).enumerate()
+                {
+                    if (seen_his >> hi) & 1 != 0 {
+                        continue;
+                    }
+                    for cy in 0..N {
+                        for cx in 0..N {
+                            let Some(ci) = state.container()[0][cy][cx] else {continue;};
+                            let (ty, tx) =
+                                state.calc_reasonable_tgt(hi, ci, cy, cx, &dist0, &self.keep_order);
+                            let ci_in_hand0 = state.container()[1][hand.y][hand.x];
+                            let d0 = calc_reach_cost(
+                                hi,
+                                hand,
+                                ci_in_hand0,
+                                ci,
+                                cy,
+                                cx,
+                                0,
+                                ty,
+                                tx,
+                                &dist0,
+                            );
+                            // actions
+                            for ai in 0..ACTION_NUM {
+                                let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
+                                let (ncz, ci_in_hand1) = if ai == CAP_SWITCH {
+                                    if (hand.y, hand.x) == (cy, cx) {
+                                        (1, Some(ci))
+                                    } else if let Some(ci_in_hand) =
+                                        state.container()[0][hand.y][hand.x]
+                                    {
+                                        (0, Some(ci_in_hand))
+                                    } else {
+                                        (0, None)
+                                    }
+                                } else {
+                                    (0, ci_in_hand0)
+                                };
+                                let d1 = calc_reach_cost(
+                                    hi,
+                                    &nhand,
+                                    ci_in_hand1,
+                                    ci,
+                                    cy,
+                                    cx,
+                                    ncz,
+                                    ty,
+                                    tx,
+                                    &dist0,
+                                );
+                                trans_eval[ai] += d1 - d0;
+                            }
+                            if state.container_is_seeked(ci).is_some() {
+                                trans_eval.iter_mut().for_each(|e| {
+                                    *e += EVAL_UNIT;
+                                });
+                            }
+                        }
+                    }
+                }
+                let mut best_eval = 1i64 << 60;
+                let mut best_acts = vec![];
+                let mut best_state = State::new(&self.a);
+                for acts in (0..ACTION_NUM.pow(N as u32)).map(|mut bit| {
+                    let mut acts = vec![];
+                    for _ in 0..N {
+                        acts.push(bit % ACTION_NUM);
+                        bit /= ACTION_NUM;
+                    }
+                    acts
+                }) {
+                    let eval = trans_eval
+                        .iter()
+                        .zip(acts.iter())
+                        .map(|(trans, &act)| trans[act])
+                        .sum::<i64>();
+                    if best_eval > eval {
+                        if let Some(nstate) = state.gen_next_state(&acts, &self.a) {
+                            best_state = nstate;
+                            best_eval = eval;
+                            best_acts = acts;
+                        }
+                    }
+                }
+                state = best_state;
+                for (hi, act) in best_acts.into_iter().enumerate() {
+                    ans_acts[hi].push(act);
+                }
+            }
+            ans_acts
+        }
     }
-}
-fn main() {
-    read::<usize>();
 }
