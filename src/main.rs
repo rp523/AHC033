@@ -4498,7 +4498,7 @@ mod solver {
     type Container = Vec<Vec<Vec<Option<usize>>>>;
     mod hand {
         use super::*;
-        #[derive(Clone, PartialEq, Eq)]
+        #[derive(Clone, Debug, PartialEq, Eq)]
         pub struct Hand {
             pub y: usize,
             pub x: usize,
@@ -4578,6 +4578,7 @@ mod solver {
 
     mod state {
         use super::*;
+        #[derive(Clone, Debug, PartialEq, Eq)]
         pub struct State {
             hands: Vec<Hand>,
             container: Container,
@@ -4637,13 +4638,13 @@ mod solver {
                     c: usize,
                     y: usize,
                     x: usize,
-                    h: usize,
+                    z: usize,
                     nfield: &mut [Vec<Vec<Option<usize>>>],
                 ) -> bool {
-                    if nfield[h][y][x].is_some() {
+                    if nfield[z][y][x].is_some() {
                         false
                     } else {
-                        nfield[h][y][x] = Some(c);
+                        nfield[z][y][x] = Some(c);
                         true
                     }
                 }
@@ -4652,15 +4653,15 @@ mod solver {
                     .hands
                     .iter()
                     .fold(0, |ex, hand| ex | (1usize << (hand.y * N + hand.x)));
-                let mut nfield = self.container.clone();
-                for (h, container) in self.container.iter().enumerate() {
+                let mut nfield = vec![vec![vec![None; N]; N]; 2];
+                for (z, container) in self.container.iter().enumerate() {
                     for (y, container) in container.iter().enumerate() {
                         for (x, container) in container.iter().enumerate() {
-                            if (exists_ohands >> (y * N + x)) & 1 != 0 {
+                            if ((exists_ohands >> (y * N + x)) & 1) != 0 {
                                 continue;
                             }
                             let Some(c) = container else {continue;};
-                            if !set_some(*c, y, x, h, &mut nfield) {
+                            if !set_some(*c, y, x, z, &mut nfield) {
                                 return None;
                             }
                         }
@@ -4755,9 +4756,6 @@ mod solver {
                 }
                 for y0 in 0..N {
                     for x0 in 0..N {
-                        if self.container[0][y0][x0].is_some() {
-                            continue;
-                        }
                         for &(dy, dx) in [(0, 1), (1, 0)].iter() {
                             if x0 == N - 1 && dy != 0 {
                                 continue;
@@ -4815,10 +4813,22 @@ mod solver {
                     }
                 }
                 for keep_order in keep_order {
+                    let mut mv = None;
+                    let mut t = (0, 0);
                     for &(ty, tx) in keep_order {
-                        if hi == 0 || dist0[cy][cx][ty][tx].is_some() {
-                            return (ty, tx);
+                        let d = if hi == 0 {
+                            (ty as i64 - cy as i64).abs() + (tx as i64 - cx as i64).abs()
+                        } else if let Some(d) = dist0[cy][cx][ty][tx] {
+                            d
+                        } else {
+                            continue;
+                        };
+                        if mv.chmin(d) {
+                            t = (ty, tx);
                         }
+                    }
+                    if mv.is_some() {
+                        return t;
                     }
                 }
                 (cy, cx)
@@ -4897,9 +4907,11 @@ mod solver {
                     (2, 1), // 7
                 ],
             ];
+            let _ = read::<usize>();
+            let a = read_mat::<usize>(N, N);
             Self {
                 t0: Instant::now(),
-                a: read_mat::<usize>(N, N),
+                a,
                 keep_order,
             }
         }
@@ -5072,6 +5084,8 @@ mod solver {
                         }
                     }
                 }
+                eprintln!("{:?}", best_acts);
+                debug_assert!(state != best_state);
                 state = best_state;
                 for (hi, act) in best_acts.into_iter().enumerate() {
                     ans_acts[hi].push(act);
