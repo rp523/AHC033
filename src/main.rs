@@ -4955,10 +4955,10 @@ mod solver {
             }
             let mut state = State::new(&self.a);
             let mut ans_acts = vec![vec![]; N];
-            while !state.has_end() {
+            for _ in 0..10000 {
                 let dist0 = state.gen_dist0();
                 // todo: split capturing or not
-                let mut trans_eval = vec![vec![0i64; ACTION_NUM]; N];
+                let mut trans_eval = vec![vec![1i64 << 60; ACTION_NUM]; N];
                 let mut seen_his = 0;
                 // 1. capturing
                 for (hi, (hand, trans_eval)) in
@@ -4986,11 +4986,8 @@ mod solver {
                             tx,
                             &dist0,
                         );
-                        trans_eval[ai] += d1 - d0;
+                        trans_eval[ai] = d1;
                     }
-                    trans_eval.iter_mut().for_each(|e| {
-                        *e += EVAL_UNIT;
-                    });
                     if state.container_is_seeked(ci).is_some() {
                         trans_eval.iter_mut().for_each(|e| {
                             *e += EVAL_UNIT;
@@ -4998,64 +4995,107 @@ mod solver {
                     }
                 }
                 // 2. not captured matching
-                for (hi, (hand, trans_eval)) in
-                    state.hands().iter().zip(trans_eval.iter_mut()).enumerate()
                 {
-                    if (seen_his >> hi) & 1 != 0 {
-                        continue;
+                    let src = N * ACTION_NUM * N * N;
+                    let dst = src + 1;
+                    let mut flow = Flow::new(dst + 1);
+                    for hi in 0..N {
+                        flow.add_cost_edge(src, hi, 1, 0);
+                        for ai in 0..ACTION_NUM {
+                            flow.add_cost_edge(hi, N + hi * ACTION_NUM + ai, 1, 0);
+                        }
                     }
-                    for cy in 0..N {
-                        for cx in 0..N {
-                            let Some(ci) = state.container()[0][cy][cx] else {continue;};
-                            let (ty, tx) =
-                                state.calc_reasonable_tgt(hi, ci, cy, cx, &dist0, &self.keep_order);
-                            let ci_in_hand0 = state.container()[1][hand.y][hand.x];
-                            let d0 = calc_reach_cost(
-                                hi,
-                                hand,
-                                ci_in_hand0,
-                                ci,
-                                cy,
-                                cx,
-                                0,
-                                ty,
-                                tx,
-                                &dist0,
-                            );
-                            // actions
-                            for ai in 0..ACTION_NUM {
-                                let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
-                                let (ncz, ci_in_hand1) = if ai == CAP_SWITCH {
-                                    if (hand.y, hand.x) == (cy, cx) {
-                                        (1, Some(ci))
-                                    } else if let Some(ci_in_hand) =
-                                        state.container()[0][hand.y][hand.x]
-                                    {
-                                        (0, Some(ci_in_hand))
-                                    } else {
-                                        (0, None)
-                                    }
-                                } else {
-                                    (0, ci_in_hand0)
-                                };
-                                let d1 = calc_reach_cost(
+                    for ci in 0..N * N {
+                        flow.add_cost_edge(N + N * ACTION_NUM + ci, dst, 1, 0);
+                    }
+
+                    for (hi, hand) in state.hands().iter().enumerate() {
+                        if (seen_his >> hi) & 1 != 0 {
+                            continue;
+                        }
+                        for cy in 0..N {
+                            for cx in 0..N {
+                                let Some(ci) = state.container()[0][cy][cx] else {continue;};
+                                let (ty, tx) = state.calc_reasonable_tgt(
                                     hi,
-                                    &nhand,
-                                    ci_in_hand1,
                                     ci,
                                     cy,
                                     cx,
-                                    ncz,
+                                    &dist0,
+                                    &self.keep_order,
+                                );
+                                let ci_in_hand0 = state.container()[1][hand.y][hand.x];
+                                let d0 = calc_reach_cost(
+                                    hi,
+                                    hand,
+                                    ci_in_hand0,
+                                    ci,
+                                    cy,
+                                    cx,
+                                    0,
                                     ty,
                                     tx,
                                     &dist0,
                                 );
-                                trans_eval[ai] += d1 - d0;
+                                // actions
+                                for ai in 0..ACTION_NUM {
+                                    let Some(nhand) = hand.act_next(hi, ai, state.container()) else {continue;};
+                                    let (ncz, ci_in_hand1) = if ai == CAP_SWITCH {
+                                        if (hand.y, hand.x) == (cy, cx) {
+                                            (1, Some(ci))
+                                        } else if let Some(ci_in_hand) =
+                                            state.container()[0][hand.y][hand.x]
+                                        {
+                                            (0, Some(ci_in_hand))
+                                        } else {
+                                            (0, None)
+                                        }
+                                    } else {
+                                        (0, ci_in_hand0)
+                                    };
+                                    let d1 = calc_reach_cost(
+                                        hi,
+                                        &nhand,
+                                        ci_in_hand1,
+                                        ci,
+                                        cy,
+                                        cx,
+                                        ncz,
+                                        ty,
+                                        tx,
+                                        &dist0,
+                                    );
+                                    let mut cost = d1;
+                                    if state.container_is_seeked(ci).is_some() {
+                                        cost *= EVAL_UNIT;
+                                    }
+                                    flow.add_cost_edge(
+                                        N + hi * ACTION_NUM + ai,
+                                        N + N * ACTION_NUM + ci,
+                                        1,
+                                        cost,
+                                    );
+                                }
                             }
-                            if state.container_is_seeked(ci).is_some() {
-                                trans_eval.iter_mut().for_each(|e| {
-                                    *e += EVAL_UNIT;
-                                });
+                        }
+                    }
+                    let fval = N as i64 - seen_his.count_ones() as i64;
+                    let (tcost, tval) = flow.min_cost_flow(src, dst, fval, fval).unwrap();
+                    for (hi, trans_eval) in trans_eval.iter_mut().enumerate() {
+                        for ai in 0..ACTION_NUM {
+                            for e in flow.g[N + hi * ACTION_NUM + ai].iter() {
+                                if e.flow == 0 {
+                                    continue;
+                                }
+                                if (e.to < N + N * ACTION_NUM)
+                                    || (N + N * ACTION_NUM + N * N <= e.to)
+                                {
+                                    continue;
+                                }
+                                let ai = (e.to - N) % N;
+                                let cost = e.cost;
+                                debug!(hi, ai, cost);
+                                trans_eval[ai] = cost;
                             }
                         }
                     }
@@ -5089,6 +5129,9 @@ mod solver {
                 state = best_state;
                 for (hi, act) in best_acts.into_iter().enumerate() {
                     ans_acts[hi].push(act);
+                }
+                if state.has_end() {
+                    break;
                 }
             }
             ans_acts
