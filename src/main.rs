@@ -4537,7 +4537,7 @@ fn main() {
 mod solver {
     use super::*;
     const N: usize = 5;
-    const T: usize = 200;
+    const T: usize = 10000;
     const MT: usize = N * N * 2;
     const MOVE_LEFT: usize = 0;
     const MOVE_RIGHT: usize = 1;
@@ -4545,7 +4545,6 @@ mod solver {
     const MOVE_DOWN: usize = 3;
     const STAY: usize = 4;
     const CAP_SWITCH: usize = 5;
-    const ACTION_NUM: usize = 6;
     const DYDX: [(i64, i64); 5] = [(0, -1), (0, 1), (-1, 0), (1, 0), (0, 0)];
     const INF: i64 = 1i64 << 60;
     const EVAL_UNIT: i64 = (N * N * 2) as i64;
@@ -4585,7 +4584,7 @@ mod solver {
             pub container: Container,
             backyard: Vec<usize>,
             seeks: Vec<usize>,
-            absorpt: usize,
+            pub absorpt: usize,
         }
         impl State {
             pub fn show(&self, hand: &Hand, li: usize, ti: usize) {
@@ -4721,45 +4720,101 @@ mod solver {
                 }
                 None
             }
-            pub fn gen_ideal(&self) -> Vec<Option<(usize, usize)>> {
+            pub fn gen_ideal(&self, a: &[Vec<usize>], dbg: bool) -> Vec<Option<(usize, usize)>> {
                 let mut ideal = vec![None; N * N];
-                let mut filled_at = 0;
+
+                let in_field_cis = (0..N)
+                    .map(|y| {
+                        (0..N)
+                            .filter_map(|x| self.container[0][y][x])
+                            .fold(0, |ors, cid| ors | (1usize << cid))
+                    })
+                    .fold(0, |ors, ors1| ors | ors1);
+                let seeked_cis = (0..N)
+                    .map(|y| y * N + self.seeks[y])
+                    .fold(0, |ors, ci| ors | (1usize << ci));
+                if dbg {
+                    for ci in 0..N * N {
+                        if ((seeked_cis >> ci) & 1) != 0 {
+                            debug!(ci);
+                        }
+                    }
+                    debug!();
+                }
+                let mut seeked_in_field_any = false;
+                for seeked_ci in (0..N * N)
+                    .filter(|&ci| ((seeked_cis >> ci) & 1) != 0)
+                    .filter(|&ci| ((in_field_cis >> ci) & 1) != 0)
+                {
+                    let y = seeked_ci / N;
+                    ideal[seeked_ci] = Some((y, N - 1));
+                    seeked_in_field_any = true;
+                }
+                if seeked_in_field_any {
+                    //return ideal;
+                }
+                let mut nexts = vec![];
                 for y in 0..N {
-                    for (rx, vx) in (0..N).skip(self.seeks[y]).enumerate().take(N / 2) {
-                        let v = y * N + vx;
-                        let posx = N - 1 - rx;
-                        ideal[v] = Some((y, posx));
-                        filled_at |= 1usize << (y * N + posx);
-                    }
-                }
-                for v in (0..N * N).filter(|&v| v % N == N - 1) {
-                    if ideal[v].is_none() {
-                        let y = v / N;
-                        let x = 2;
-                        if ((filled_at >> (y * N + x)) & 1) != 0 {
-                            continue;
+                    let mut nex = None;
+                    for (r, ai) in (0..N).skip(self.backyard[y]).enumerate() {
+                        if ((seeked_cis >> a[y][ai]) & 1) != 0 {
+                            // found seeked
+                            nex = Some(r);
+                            break;
                         }
-                        ideal[v] = Some((y, x));
-                        filled_at |= 1usize << (y * N + x);
+                    }
+                    if let Some(nex) = nex {
+                        nexts.push((nex, y));
                     }
                 }
-                for v in 0..N * N {
-                    if ideal[v].is_some() {
-                        continue;
-                    }
-                    'scan: for y in 0..N {
-                        for x in (0..N).rev() {
-                            if ((filled_at >> (y * N + x)) & 1) != 0 {
-                                continue;
+                nexts.sort();
+                let keep_order = vec![
+                    vec![
+                        (1, 2), // 0
+                        (3, 2), // 0
+                        (0, 2), // 0
+                        (4, 2), // 0
+                    ],
+                    vec![
+                        (0, 3), // 1
+                        (4, 3), // 1
+                    ],
+                    vec![
+                        (1, 3), // 2
+                        (3, 3), // 2
+                    ],
+                    vec![
+                        (2, 3), // 3
+                    ],
+                    vec![
+                        (2, 2), // 4
+                    ],
+                    vec![
+                        (0, 1), // 5
+                        (4, 1), // 5
+                    ],
+                    vec![
+                        (1, 1), // 6
+                        (3, 1), // 6
+                    ],
+                    vec![
+                        (2, 1), // 7
+                    ],
+                ];
+                for (_, y) in nexts.into_iter().take(1) {
+                    let ci = self.container[0][y][0].unwrap();
+                    if ideal[ci].is_none() {
+                        'search_empty: for keep_order in keep_order.iter() {
+                            for &(ky, kx) in keep_order {
+                                if self.container[0][ky][kx].is_some() {
+                                    continue;
+                                }
+                                ideal[ci] = Some((ky, kx));
+                                break 'search_empty;
                             }
-                            ideal[v] = Some((y, x));
-                            filled_at |= 1usize << (y * N + x);
-                            break 'scan;
                         }
                     }
                 }
-                debug_assert!(ideal.iter().all(|ideal| ideal.is_some()));
-                debug_assert!(filled_at == (1usize << (N * N)) - 1);
                 ideal
             }
         }
@@ -4824,36 +4879,18 @@ mod solver {
                 a,
             }
         }
-        fn calc_reach_cost(
+        fn calc_carry_dist(
             hi: usize,
-            (hy, hx): (usize, usize),
-            ci_in_hand: Option<usize>,
-            ci: usize,
             cy: usize,
             cx: usize,
-            cz: usize,
             ty: usize,
             tx: usize,
             dist0: &[Vec<Vec<Vec<Option<i64>>>>],
             container: &Container,
         ) -> Option<i64> {
-            if (cy, cx, cz) == (ty, tx, 0) {
+            if (cy, cx) == (ty, tx) {
                 return Some(0);
             }
-            let capture = if ci_in_hand == Some(ci) {
-                // already capturing this container.
-                // must drop
-                1
-            } else if ci_in_hand.is_none() {
-                // the hand is empty
-                // must pick up & drop
-                2
-            } else {
-                // hand capturing another container
-                // must drop & pick up & drop
-                3
-            };
-            let come_move = (cy as i64 - hy as i64).abs() + (cx as i64 - hx as i64).abs();
             if container[0][ty][tx].is_some() {
                 return None;
             }
@@ -4864,7 +4901,7 @@ mod solver {
             } else {
                 return None;
             };
-            Some(capture + come_move + go_move)
+            Some(go_move)
         }
         fn sim(&self) -> Vec<Vec<usize>> {
             let mut p = 1usize << 30;
@@ -4881,10 +4918,10 @@ mod solver {
             let mut ti = 1;
             let mut ans_acts = vec![vec![]; N];
             for li in 0.. {
-                if li == 20 {
+                if li >= 50 {
                     debug!();
                 }
-                let ideal = state.gen_ideal();
+                let ideal = state.gen_ideal(&self.a, li >= 50);
 
                 // 1. move & lift up
                 let drop_plan = {
@@ -4899,10 +4936,15 @@ mod solver {
                     let dist0 = state.gen_dist0();
                     let mut nti = ti;
                     let mut reach = vec![None; N];
+                    const NON0_HAND_LIM: usize = 1;
+                    let mut non0_hand = 0;
                     loop {
                         let mut best_ev = None;
                         let mut best_pair = (0, (0, 0), 0, (0, 0));
                         for (hi, (hy, hx)) in hand.at(ti).into_iter().enumerate() {
+                            if hi > 0 && non0_hand >= NON0_HAND_LIM {
+                                continue;
+                            }
                             if ((seen_his >> hi) & 1) != 0 {
                                 continue;
                             }
@@ -4913,13 +4955,11 @@ mod solver {
                                         continue;
                                     }
                                     let Some((ty, tx)) = ideal[ci] else {continue;};
-                                    let Some(ev) = Self::calc_reach_cost(hi, (hy, hx), None, ci, cy, cx, 0, ty, tx, &dist0, &state.container) else {continue;};
-                                    if ev == 0 {
+                                    let Some(carry_dist) = Self::calc_carry_dist(hi, cy, cx, ty, tx, &dist0, &state.container) else {continue;};
+                                    if carry_dist == 0 {
                                         continue;
                                     }
-                                    if li >= 89 {
-                                        debug!();
-                                    }
+                                    let ev = (N - 1 - tx, carry_dist);
                                     if best_ev.chmin(ev) {
                                         best_pair = (hi, (hy, hx), ci, (cy, cx));
                                     }
@@ -4930,6 +4970,9 @@ mod solver {
                             break;
                         }
                         let (hi, (hy, hx), ci, (cy, cx)) = best_pair;
+                        if hi > 0 {
+                            non0_hand += 1;
+                        }
                         debug!();
                         if let Some((lt, (ly, lx))) = Self::hand_motion(
                             hi,
@@ -5129,10 +5172,43 @@ mod solver {
                         }
                     });
                 }
-                if li == 20 {
-                    debug!();
-                }
 
+                /*
+                               {
+                                   let need_hand = N * N - state.absorpt.count_ones() as usize;
+                                   let mut bomb_his = vec![];
+                                   for bomb_hi in (0..N).skip(need_hand) {
+                                       for y in 0..N {
+                                           for x in 0..N {
+                                               let Some(rem_hi) = hand.plan[ti][y][x] else {continue;};
+                                               if rem_hi != bomb_hi {
+                                                   continue;
+                                               }
+                                               bomb_his.push(rem_hi);
+                                           }
+                                       }
+                                   }
+                                   if !bomb_his.is_empty() {
+                                       let mut act = vec![STAY; N];
+                                       ti += 1;
+                                       for hi in 0..N {
+                                           if bomb_his.contains(&hi) {
+                                               act[hi] = BOMB;
+                                               for y in 0..N {
+                                                   for x in 0..N {
+                                                       if hand.plan[ti][y][x] == Some(hi) {
+                                                           hand.plan[ti][y][x] = None;
+                                                       }
+                                                   }
+                                               }
+                                           }
+                                       }
+                                       for (ai, act) in act.into_iter().enumerate() {
+                                           ans_acts[ai].push(act);
+                                       }
+                                   }
+                               }
+                */
                 // finkey
                 #[cfg(debug_assertions)]
                 {
@@ -5140,7 +5216,7 @@ mod solver {
                 }
 
                 debug!(li, ti, drop_plan.is_empty());
-                if li >= 20 {
+                if li >= 19 {
                     debug!();
                     break;
                 }
