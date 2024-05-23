@@ -4578,6 +4578,50 @@ mod solver {
             absorpt: usize,
         }
         impl State {
+            pub fn show(&self, li: usize, ti: usize) {
+                eprintln!("li = {} ti = {}", li, ti);
+                for y in 0..N {
+                    {
+                        for x in 0..N {
+                            let mut s0 = String::from("    ");
+                            for (hi, hand) in self.hands.iter().enumerate() {
+                                if hand.y == y && hand.x == x {
+                                    debug_assert!(self.hands[hi].y == y && self.hands[hi].x == x);
+                                    let mut s = hi.to_string().chars().collect::<VecDeque<_>>();
+                                    s.push_back(')');
+                                    while s.len() < 3 {
+                                        s.push_front(' ');
+                                    }
+                                    s.push_front('(');
+                                    s0 = s.into_iter().collect::<String>();
+                                }
+                            }
+                            eprint!("{s0}");
+                        }
+                        eprintln!();
+                    }
+                    for z in (0..2).rev() {
+                        for x in 0..N {
+                            let mut s0 = String::from(" -- ");
+                            if let Some(ci) = self.container[z][y][x] {
+                                let mut s = ci.to_string().chars().collect::<VecDeque<_>>();
+                                s.push_back(' ');
+                                while s.len() < 4 {
+                                    s.push_front(' ');
+                                }
+                                s0 = s.into_iter().collect::<String>();
+                            }
+                            eprint!("{s0}");
+                        }
+                        eprintln!();
+                    }
+                    for x in 0..N {
+                        eprint!("----");
+                    }
+                    eprintln!();
+                }
+                eprintln!();
+            }
             pub fn update_backyard(&mut self, a: &[Vec<usize>]) {
                 for y in 0..N {
                     if self.container[0][y][0].is_some() {
@@ -4698,7 +4742,7 @@ mod solver {
                         continue;
                     }
                     'scan: for y in 0..N {
-                        for x in 0..N {
+                        for x in (0..N).rev() {
                             if ((filled_at >> (y * N + x)) & 1) != 0 {
                                 continue;
                             }
@@ -4867,6 +4911,9 @@ mod solver {
                                     if ev == 0 {
                                         continue;
                                     }
+                                    if li >= 89 {
+                                        debug!();
+                                    }
                                     if best_ev.chmin(ev) {
                                         best_pair = (hi, ci, (y, x));
                                     }
@@ -4892,19 +4939,8 @@ mod solver {
                             &mut dist,
                             &mut pre,
                         ) {
-                            let upd = Self::back_trace(
-                                hi,
-                                ti,
-                                lt,
-                                ly,
-                                lx,
-                                &pre,
-                            );
-                            Self::update_back_trace(
-                                upd,
-                                &mut hand_plan,
-                                &mut ans_acts,
-                            );
+                            let upd = Self::back_trace(hi, ti, lt, ly, lx, &pre);
+                            Self::update_back_trace(upd, &mut hand_plan, &mut ans_acts);
                             let cid = nstate.container[0][ly][lx].unwrap();
                             nstate.container[0][ly][lx] = None;
                             nstate.container[1][ly][lx] = Some(cid);
@@ -4953,19 +4989,8 @@ mod solver {
                             &mut dist,
                             &mut pre,
                         ) {
-                            let upd = Self::back_trace(
-                                hi,
-                                ti,
-                                lt,
-                                ly,
-                                lx,
-                                &pre,
-                            );
-                            Self::update_back_trace(
-                                upd,
-                                &mut hand_plan,
-                                &mut ans_acts,
-                            );
+                            let upd = Self::back_trace(hi, ti, lt, ly, lx, &pre);
+                            Self::update_back_trace(upd, &mut hand_plan, &mut ans_acts);
                             nstate.hands[hi].y = ly;
                             nstate.hands[hi].x = lx;
                             rem_tgt_area -= 1usize << (ly * N + lx);
@@ -4981,13 +5006,18 @@ mod solver {
                     });
                     drop_plan.sort_by_cached_key(|&(hi, (cy, cx), (ty, tx))| {
                         (
-                            tx == N - 1,
+                            N - 1 - tx,
                             (ty as i64 - cy as i64).abs() + (tx as i64 - cx as i64).abs(),
                             hi == 0,
                         )
                     });
                     drop_plan
                 };
+
+                #[cfg(debug_assertions)]
+                {
+                    state.show(li, ti);
+                }
 
                 // 2. move & lift down
                 {
@@ -4998,7 +5028,11 @@ mod solver {
                     let mut rem_tgt_area = (1usize << (N * N)) - 1;
                     let mut lts = vec![None; N];
                     for (hi, (sy, sx), (ty, tx)) in drop_plan.iter().copied() {
-                        if let Some((lt, (ly, lx))) = Self::hand_motion(
+                        if li == 11 {
+                            debug!();
+                        }
+                        let cid = nstate.container[1][sy][sx].unwrap();
+                        let (lt, (ly, lx)) = if let Some((lt, (ly, lx))) = Self::hand_motion(
                             hi,
                             &state,
                             (sy, sx),
@@ -5012,46 +5046,45 @@ mod solver {
                             &mut dist,
                             &mut pre,
                         ) {
-                            seen_h_at[ly][lx] = Some(lt);
-                            seen_his |= 1usize << hi;
-                            rem_tgt_area -= 1usize << (ty * N + tx);
-                            let upd = Self::back_trace(
-                                hi,
-                                ti,
-                                lt,
-                                ly,
-                                lx,
-                                &pre,
-                            );
-                            Self::update_back_trace(
-                                upd,
-                                &mut hand_plan,
-                                &mut ans_acts,
-                            );
-                            let cid = nstate.container[1][sy][sx].unwrap();
-                            nstate.container[1][sy][sx] = None;
-                            nstate.container[0][ly][lx] = Some(cid);
-                            nstate.hands[hi].y = ly;
-                            nstate.hands[hi].x = lx;
-
-                            ans_acts[hi].push(CAP_SWITCH);
-                            hand_plan[lt + 1][ly][lx] = Some(hi);
-                            nti.chmax(lt + 1);
-                            lts[hi] = Some(lt + 1);
+                            (lt, (ly, lx))
                         } else {
-                            seen_h_at[sy][sx] = Some(ti + 1);
-                            seen_his |= 1usize << hi;
-                            rem_tgt_area -= 1usize << (sy * N + sx);
-                            let cid = nstate.container[1][sy][sx].unwrap();
-                            nstate.container[1][sy][sx] = None;
-                            nstate.container[0][sy][sx] = Some(cid);
+                            let mut tgt_area = rem_tgt_area;
+                            for y in 0..N {
+                                tgt_area &= !(y * N + 0);
+                            }
+                            if let Some((lt, (ly, lx))) = Self::hand_motion(
+                                hi,
+                                &state,
+                                (sy, sx),
+                                ti,
+                                &seen_h_at,
+                                None,
+                                tgt_area,
+                                &mut p,
+                                hi == 0,
+                                &hand_plan,
+                                &mut dist,
+                                &mut pre,
+                            ) {
+                                (lt, (ly, lx))
+                            } else {
+                                panic!();
+                            }
+                        };
+                        let upd = Self::back_trace(hi, ti, lt, ly, lx, &pre);
+                        Self::update_back_trace(upd, &mut hand_plan, &mut ans_acts);
+                        nstate.container[1][sy][sx] = None;
+                        seen_h_at[ly][lx] = Some(lt);
+                        seen_his |= 1usize << hi;
+                        rem_tgt_area -= 1usize << (ly * N + lx);
+                        nstate.container[0][ly][lx] = Some(cid);
+                        nstate.hands[hi].y = ly;
+                        nstate.hands[hi].x = lx;
 
-                            ans_acts[hi].push(CAP_SWITCH);
-                            hand_plan[ti + 1][sy][sx] = Some(hi);
-                            nti.chmax(ti + 1);
-                            lts[hi] = Some(ti + 1);
-                        }
-                        p -= 1;
+                        ans_acts[hi].push(CAP_SWITCH);
+                        hand_plan[lt + 1][ly][lx] = Some(hi);
+                        nti.chmax(lt + 1);
+                        lts[hi] = Some(lt + 1);
                     }
                     for hi in 0..N {
                         let Some(t0) = lts[hi] else {continue;};
@@ -5082,19 +5115,8 @@ mod solver {
                             &mut dist,
                             &mut pre,
                         ) {
-                            let upd = Self::back_trace(
-                                hi,
-                                ti,
-                                lt,
-                                ly,
-                                lx,
-                                &pre,
-                            );
-                            Self::update_back_trace(
-                                upd,
-                                &mut hand_plan,
-                                &mut ans_acts,
-                            );
+                            let upd = Self::back_trace(hi, ti, lt, ly, lx, &pre);
+                            Self::update_back_trace(upd, &mut hand_plan, &mut ans_acts);
                             nstate.hands[hi].y = ly;
                             nstate.hands[hi].x = lx;
                             rem_tgt_area -= 1usize << (ly * N + lx);
@@ -5116,20 +5138,24 @@ mod solver {
                     debug!();
                 }
 
+                #[cfg(debug_assertions)]
+                {
+                    state.show(li, ti);
+                }
+
                 debug!(li, ti, drop_plan.is_empty());
-                if li >= 30 {
+                if li >= 100 {
                     debug!();
                     break;
                 }
             }
             ans_acts
         }
-        fn update_back_trace (
+        fn update_back_trace(
             upd: PlanUpdate,
             hand_plan: &mut [Vec<Vec<Option<usize>>>],
             ans_acts: &mut [Vec<usize>],
-        )
-        {
+        ) {
             for (t, y, x) in upd.hand_plan {
                 hand_plan[t][y][x] = Some(upd.hi);
             }
@@ -5221,7 +5247,7 @@ mod solver {
                     if !skip_gound && state.container[0][y1][x1].is_some() {
                         continue;
                     }
-                    if !skip_gound && x0 == 0 && dy != 0 {
+                    if !skip_gound && x1 == 0 {
                         continue;
                     }
                     if let Some(other_lt) = seen_h_at[y1][x1] {
