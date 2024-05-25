@@ -4537,7 +4537,7 @@ fn main() {
 mod solver {
     use super::*;
     const N: usize = 5;
-    const T: usize = 2000;
+    const T: usize = 10000;
     const MT: usize = N * N * 2;
     const MOVE_LEFT: usize = 0;
     const MOVE_RIGHT: usize = 1;
@@ -4723,7 +4723,7 @@ mod solver {
                 }
                 None
             }
-            pub fn gen_ideal(&self, a: &[Vec<usize>], dbg: bool) -> Vec<Option<(usize, usize)>> {
+            pub fn gen_ideal(&self, a: &[Vec<usize>]) -> Vec<Option<(usize, usize)>> {
                 let mut ideal = vec![None; N * N];
 
                 let in_field_cis = (0..N)
@@ -4736,14 +4736,6 @@ mod solver {
                 let seeked_cis = (0..N)
                     .map(|y| y * N + self.seeks[y])
                     .fold(0, |ors, ci| ors | (1usize << ci));
-                if dbg {
-                    for ci in 0..N * N {
-                        if ((seeked_cis >> ci) & 1) != 0 {
-                            debug!(ci);
-                        }
-                    }
-                    debug!();
-                }
                 let mut seeked_in_field_any = false;
                 for seeked_ci in (0..N * N)
                     .filter(|&ci| ((seeked_cis >> ci) & 1) != 0)
@@ -4866,10 +4858,10 @@ mod solver {
                                 } else {
                                     'Q'
                                 }
-                            },
+                            }
                             BOMB => {
                                 'B'
-                            },
+                            }
                             _ => unreachable!(),
                         }
                     );
@@ -4924,10 +4916,7 @@ mod solver {
             let mut ti = 1;
             let mut ans_acts = vec![vec![]; N];
             for li in 0.. {
-                if li >= 19 {
-                    debug!();
-                }
-                let ideal = state.gen_ideal(&self.a, li >= 50);
+                let ideal = state.gen_ideal(&self.a);
 
                 // 1. move & lift up
                 let drop_plan = {
@@ -4945,9 +4934,6 @@ mod solver {
                         for cy in 0..N {
                             for cx in 0..N {
                                 let Some(ci) = state.container[0][cy][cx] else {continue;};
-                                if li >= 6 && ci == 13 {
-                                    debug!(seen_his);
-                                }
                                 for (hi, (hy, hx)) in hand.at(ti).into_iter() {
                                     if ((seen_his >> hi) & 1) != 0 {
                                         continue;
@@ -4960,22 +4946,17 @@ mod solver {
                                     if go_move == 0 {
                                         continue;
                                     }
-                                    let come_move = (cy as i64 - hy as i64).abs() + (cx as i64 - hx as i64).abs();
+                                    let come_move = (cy as i64 - hy as i64).abs()
+                                        + (cx as i64 - hx as i64).abs();
                                     if hi > 0 && non0_hand >= NON0_HAND_LIM && come_move > 0 {
                                         continue;
                                     }
                                     let ev = (N - 1 - tx, come_move, go_move);
-                                    if li >= 6 && ci == 13 {
-                                        debug!(seen_his, hi, ev.0, ev.1, ev.2);
-                                    }
                                     if best_ev.chmin(ev) {
                                         best_pair = (hi, (hy, hx), ci, (cy, cx));
                                     }
                                 }
                             }
-                        }
-                        if li >= 6 {
-                            debug!();
                         }
                         if best_ev.is_none() {
                             break;
@@ -5012,9 +4993,6 @@ mod solver {
                     for (hi, (hy, hx)) in hand.at(ti).into_iter() {
                         if ((seen_his >> hi) & 1) != 0 {
                             continue;
-                        }
-                        if li >= 7 && hi == 4 {
-                            debug!();
                         }
                         if let Some((ly, lx)) = Self::hand_motion(
                             hi,
@@ -5054,18 +5032,13 @@ mod solver {
                     state.show(&hand, li, ti);
                     eprintln!("{:?}", drop_plan);
                 }
-                if li == 6 {
-                    debug!();
-                }
 
                 // 2. move & lift down
                 {
                     let nti = ti + 1 + TDELTA;
                     let mut seen_his = 0;
                     let static_block0 = (0..N)
-                        .map(|y| {
-                            1usize << (y * N)
-                        })
+                        .map(|y| 1usize << (y * N))
                         .fold(0, |ors, ors1| ors | ors1);
                     let static_block1 = (0..N)
                         .map(|y| {
@@ -5090,7 +5063,11 @@ mod solver {
                             nti,
                             1usize << (ty * N + tx),
                             &mut p,
-                            if hi == 0 {static_block0} else {static_block1},
+                            if hi == 0 {
+                                static_block0
+                            } else {
+                                static_block1
+                            },
                             &hand,
                             &mut dist,
                             &mut pre,
@@ -5153,14 +5130,17 @@ mod solver {
                     break;
                 }
                 // bomb
-                if false
-                {
+                if false {
                     let tod = N * N - state.absorpt.count_ones() as usize;
                     if tod < N {
                         let use_to = tod - 1;
-                        let bomb_any = (0..N).any(|y|
-                            (0..N).filter_map(|x| hand.plan[ti][y][x]).filter(|&hi| hi > use_to).count() > 0
-                        );
+                        let bomb_any = (0..N).any(|y| {
+                            (0..N)
+                                .filter_map(|x| hand.plan[ti][y][x])
+                                .filter(|&hi| hi > use_to)
+                                .count()
+                                > 0
+                        });
                         if bomb_any {
                             for y in 0..N {
                                 for x in 0..N {
@@ -5177,18 +5157,13 @@ mod solver {
                         }
                     }
                 }
-                debug!(li, ti, drop_plan.is_empty());
                 // finkey
                 #[cfg(debug_assertions)]
                 {
                     state.show(&hand, li, ti);
                 }
-
-                if li >= 100 {
-                    debug!();
-                    break;
-                }
             }
+            eprintln!("{}", ti - 1);
             ans_acts
         }
         fn update_back_trace(upd: PlanUpdate, hand: &mut Hand, ans_acts: &mut [Vec<usize>]) {
