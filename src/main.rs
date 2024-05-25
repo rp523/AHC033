@@ -4545,6 +4545,7 @@ mod solver {
     const MOVE_DOWN: usize = 3;
     const STAY: usize = 4;
     const CAP_SWITCH: usize = 5;
+    const BOMB: usize = 6;
     const DYDX: [(i64, i64); 5] = [(0, -1), (0, 1), (-1, 0), (1, 0), (0, 0)];
     const INF: i64 = 1i64 << 60;
     const EVAL_UNIT: i64 = (N * N * 2) as i64;
@@ -4565,12 +4566,12 @@ mod solver {
                 }
             }
             #[inline(always)]
-            pub fn at(&self, ti: usize) -> [(usize, usize); N] {
-                let mut pos = [(0, 0); N];
+            pub fn at(&self, ti: usize) -> Vec<(usize, (usize, usize))> {
+                let mut pos = vec![];
                 for y in 0..N {
                     for x in 0..N {
                         let Some(hi) = self.plan[ti][y][x] else {continue;};
-                        pos[hi] = (y, x);
+                        pos.push((hi, (y, x)));
                     }
                 }
                 pos
@@ -4865,7 +4866,10 @@ mod solver {
                                 } else {
                                     'Q'
                                 }
-                            }
+                            },
+                            BOMB => {
+                                'B'
+                            },
                             _ => unreachable!(),
                         }
                     );
@@ -4938,16 +4942,16 @@ mod solver {
                     loop {
                         let mut best_ev = None;
                         let mut best_pair = (0, (0, 0), 0, (0, 0));
-                        for (hi, (hy, hx)) in hand.at(ti).into_iter().enumerate() {
-                            if hi > 0 && non0_hand >= NON0_HAND_LIM {
-                                continue;
-                            }
-                            if ((seen_his >> hi) & 1) != 0 {
-                                continue;
-                            }
-                            for cy in 0..N {
-                                for cx in 0..N {
-                                    let Some(ci) = state.container[0][cy][cx] else {continue;};
+                        for cy in 0..N {
+                            for cx in 0..N {
+                                let Some(ci) = state.container[0][cy][cx] else {continue;};
+                                if li >= 6 && ci == 13 {
+                                    debug!(seen_his);
+                                }
+                                for (hi, (hy, hx)) in hand.at(ti).into_iter() {
+                                    if ((seen_his >> hi) & 1) != 0 {
+                                        continue;
+                                    }
                                     if ((seen_cis >> ci) & 1) != 0 {
                                         continue;
                                     }
@@ -4957,12 +4961,21 @@ mod solver {
                                         continue;
                                     }
                                     let come_move = (cy as i64 - hy as i64).abs() + (cx as i64 - hx as i64).abs();
-                                    let ev = (N - 1 - tx, go_move, come_move);
+                                    if hi > 0 && non0_hand >= NON0_HAND_LIM && come_move > 0 {
+                                        continue;
+                                    }
+                                    let ev = (N - 1 - tx, come_move, go_move);
+                                    if li >= 6 && ci == 13 {
+                                        debug!(seen_his, hi, ev.0, ev.1, ev.2);
+                                    }
                                     if best_ev.chmin(ev) {
                                         best_pair = (hi, (hy, hx), ci, (cy, cx));
                                     }
                                 }
                             }
+                        }
+                        if li >= 6 {
+                            debug!();
                         }
                         if best_ev.is_none() {
                             break;
@@ -4996,7 +5009,7 @@ mod solver {
                     } // loop
 
                     // 1 waiting hands
-                    for (hi, (hy, hx)) in hand.at(ti).into_iter().enumerate() {
+                    for (hi, (hy, hx)) in hand.at(ti).into_iter() {
                         if ((seen_his >> hi) & 1) != 0 {
                             continue;
                         }
@@ -5020,7 +5033,9 @@ mod solver {
                             seen_his |= 1usize << hi;
                             //seen_cis |= 1usize << ci;
                         } else {
-                            assert!(false);
+                            ans_acts[hi].push(BOMB);
+                            hand.plan[ti + 1][hy][hx] = None;
+                            //assert!(false);
                         }
                     }
                     ti = nti;
@@ -5037,8 +5052,8 @@ mod solver {
                 #[cfg(debug_assertions)]
                 {
                     state.show(&hand, li, ti);
+                    eprintln!("{:?}", drop_plan);
                 }
-                eprintln!("{:?}", drop_plan);
                 if li == 6 {
                     debug!();
                 }
@@ -5101,7 +5116,7 @@ mod solver {
                     }
 
                     // 2 2 waiting hands
-                    for (hi, (hy, hx)) in hand.at(ti).into_iter().enumerate() {
+                    for (hi, (hy, hx)) in hand.at(ti).into_iter() {
                         if ((seen_his >> hi) & 1) != 0 {
                             continue;
                         }
@@ -5120,7 +5135,9 @@ mod solver {
                             let upd = Self::back_trace(hi, ti, nti + 1, ly, lx, &pre);
                             Self::update_back_trace(upd, &mut hand, &mut ans_acts);
                         } else {
-                            assert!(false);
+                            //assert!(false);
+                            ans_acts[hi].push(BOMB);
+                            hand.plan[ti + 1][hy][hx] = None;
                         }
                     }
                     ti = nti + 1;
@@ -5128,18 +5145,47 @@ mod solver {
                     state.update_seeks();
                 }
 
+                #[cfg(debug_assertions)]
+                {
+                    state.show(&hand, li, ti);
+                }
+                if state.has_end() {
+                    break;
+                }
+                // bomb
+                if false
+                {
+                    let tod = N * N - state.absorpt.count_ones() as usize;
+                    if tod < N {
+                        let use_to = tod - 1;
+                        let bomb_any = (0..N).any(|y|
+                            (0..N).filter_map(|x| hand.plan[ti][y][x]).filter(|&hi| hi > use_to).count() > 0
+                        );
+                        if bomb_any {
+                            for y in 0..N {
+                                for x in 0..N {
+                                    let Some(hi) = hand.plan[ti][y][x] else {continue;};
+                                    if hi <= use_to {
+                                        hand.plan[ti + 1][y][x] = Some(hi);
+                                        ans_acts[hi].push(STAY);
+                                    } else {
+                                        ans_acts[hi].push(BOMB);
+                                    }
+                                }
+                            }
+                            ti += 1;
+                        }
+                    }
+                }
+                debug!(li, ti, drop_plan.is_empty());
                 // finkey
                 #[cfg(debug_assertions)]
                 {
                     state.show(&hand, li, ti);
                 }
 
-                debug!(li, ti, drop_plan.is_empty());
-                if li >= 25 {
+                if li >= 100 {
                     debug!();
-                    break;
-                }
-                if state.has_end() {
                     break;
                 }
             }
