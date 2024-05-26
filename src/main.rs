@@ -4926,7 +4926,7 @@ mod solver {
                     let mut seen_his = 0;
                     let mut seen_cis = 0;
                     let dist0 = state.gen_dist0();
-                    let nti = ti + TDELTA;
+                    let mut nti = ti + TDELTA;
                     let mut non0_hand = 0;
                     loop {
                         let mut best_ev = None;
@@ -4989,6 +4989,32 @@ mod solver {
                         }
                     } // loop
 
+                    // 1 remove useless action
+                    if seen_his != 0 {
+                        'ignore: loop {
+                            let mut seen_acts = 0usize;
+                            for hi in (0..N).filter(|&hi| ((seen_his >> hi) & 1) != 0) {
+                                if ans_acts[hi].is_empty() {
+                                    break 'ignore;
+                                }
+                                seen_acts |= 1usize << ans_acts[hi].last().unwrap();
+                            }
+                            if seen_acts == 1usize << STAY {
+                                for hi in (0..N).filter(|&hi| ((seen_his >> hi) & 1) != 0) {
+                                    ans_acts[hi].pop();
+                                }
+                                for y in 0..N {
+                                    for x in 0..N {
+                                        hand.plan[nti][y][x] = None;
+                                    }
+                                }
+                                nti -= 1;
+                            } else {
+                                break 'ignore;
+                            }
+                        }
+                    }
+
                     // 1 waiting hands
                     for (hi, (hy, hx)) in hand.at(ti).into_iter() {
                         if ((seen_his >> hi) & 1) != 0 {
@@ -5035,7 +5061,7 @@ mod solver {
 
                 // 2. move & lift down
                 {
-                    let nti = ti + 1 + TDELTA;
+                    let mut nti = ti + 1 + TDELTA;
                     let mut seen_his = 0;
                     let static_block0 = (0..N)
                         .map(|y| 1usize << (y * N))
@@ -5054,6 +5080,7 @@ mod solver {
                         })
                         .fold(0, |ors, ors1| ors | ors1);
                     let mut tgt_area = (1usize << (N * N)) - 1;
+                    let mut reach_info = vec![];
                     for (hi, (sy, sx), (ty, tx)) in drop_plan.iter().copied() {
                         let ci = state.container[0][sy][sx].unwrap();
                         if let Some((ly, lx)) = Self::hand_motion(
@@ -5078,17 +5105,51 @@ mod solver {
                             seen_his |= 1usize << hi;
                             tgt_area &= !(1usize << (ly * N + lx));
                             // capture
-                            state.container[0][sy][sx] = None;
                             ans_acts[hi].push(CAP_SWITCH);
                             hand.plan[ti + 1][sy][sx] = Some(hi);
                             // carry
                             Self::update_back_trace(upd, &mut hand, &mut ans_acts);
-                            // release
+
+                            reach_info.push((hi, (sy, sx), (ly, lx)));
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    // 2 remove useless action
+                    if !reach_info.is_empty() {
+                        'ignore: loop {
+                            let mut seen_acts = 0usize;
+                            for &(hi, _, _) in reach_info.iter() {
+                                if ans_acts[hi].is_empty() {
+                                    break 'ignore;
+                                }
+                                seen_acts |= 1usize << ans_acts[hi].last().unwrap();
+                            }
+                            if seen_acts == 1usize << STAY {
+                                for &(hi, _, _) in reach_info.iter() {
+                                    ans_acts[hi].pop();
+                                }
+                                for y in 0..N {
+                                    for x in 0..N {
+                                        hand.plan[nti][y][x] = None;
+                                    }
+                                }
+                                if li == 0 {
+                                    debug!(nti, nti - 1);
+                                }
+                                nti -= 1;
+                            } else {
+                                break 'ignore;
+                            }
+                        }
+                        // end
+                        for &(hi, (sy, sx), (ly, lx)) in reach_info.iter() {
+                            let ci = state.container[0][sy][sx].unwrap();
+                            state.container[0][sy][sx] = None;
                             state.container[0][ly][lx] = Some(ci);
                             ans_acts[hi].push(CAP_SWITCH);
                             hand.plan[nti + 1][ly][lx] = Some(hi);
-                        } else {
-                            continue;
                         }
                     }
 
